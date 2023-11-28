@@ -1,4 +1,4 @@
-module github.com/mellanox/gnxi
+module github.com/Mellanox/gnxi
 
 go 1.13
 
