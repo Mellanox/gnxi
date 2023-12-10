@@ -19,10 +19,13 @@ package credentials
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/asn1"
+	"encoding/json"
 	"encoding/pem"
 	"flag"
 	"fmt"
 	"io/ioutil"
+	"reflect"
 
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
@@ -48,6 +51,7 @@ var (
 	passwordKey    = "password"
 	caEnt          *entity.Entity
 	targetName     = "client.com"
+	pin_data       = ""
 )
 
 func init() {
@@ -69,6 +73,66 @@ func (a *userCredentials) GetRequestMetadata(ctx context.Context, uri ...string)
 
 func (a *userCredentials) RequireTransportSecurity() bool {
 	return true
+}
+
+func read_pin_data() {
+	log.Info("Loading authentication SAN data from webclient.")
+	fi, err := ioutil.ReadFile("/opt/ufm/files/conf/webclient/ufm_client_authen.db")
+	if err != nil {
+		//cannot read client ufm client authentication file
+		log.Error("Could not read the authentication file")
+		return
+	}
+	var result map[string]map[string]interface{}
+	json.Unmarshal([]byte(fi), &result)
+	// we convert the file into map of map of interface to extract the string.
+	pin_data = fmt.Sprintf("%s", reflect.ValueOf(result["cert_info"]["ssl_cert_hostnames"]).Index(0))
+	log.Info("Loaded pin data to server: " + pin_data)
+}
+
+// Extract the client certification from a known location and compare it to the SAN of the client certificate.
+// return nil if cannot open the file or it pass SAN test.
+// return error else
+func CheckCertSANData(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+	log.Info("Starting checking SAN of the client certificate.")
+	if len(verifiedChains) == 0 {
+		return fmt.Errorf("tls: SAN pinning failed, No client certificate found")
+	}
+	// if we do not have certificate inside of the leaf we need to parse it from the client cert
+	certData := verifiedChains[0][0]
+
+	SubjectSANID := asn1.ObjectIdentifier{2, 5, 29, 17} // the id of SubjectAltName
+	for i := range certData.Extensions {
+		extension := certData.Extensions[i]
+		extention_ID := extension.Id
+		// searching for the extension that is equal to SubjectAltName
+		if len(extention_ID) != len(SubjectSANID) {
+			continue
+		}
+		// check the id of the extension to see if it equal to SAN
+		isSAN := true
+		for i := range SubjectSANID {
+			if extention_ID[i] != SubjectSANID[i] {
+				isSAN = false
+				break
+			}
+		}
+		if !isSAN {
+			continue
+		}
+
+		// extracting the certificate.
+		certificate_SAN := string(extension.Value)[4:] // the 4 first charcters are currecpted if you use this string, but it not use for us.
+		log.Info("Found SAN data, got: " + certificate_SAN)
+		if certificate_SAN != pin_data {
+			log.Error("SAN is not equal to authentication file! returning fail connection")
+			return fmt.Errorf("tls: SAN pinning failed, client certificate expected: %s, Got:%s", pin_data, certificate_SAN)
+		}
+		// if checked that everything is fine, and we can return true
+		return nil
+	}
+	log.Error("Could not find Client SubjectAltName")
+	return fmt.Errorf("tls: SAN pinning failed, client certificate does not have SubjectAltName extension.")
 }
 
 // loadFromFile loads a certificate key pair into a tls certificate and a CA certificate into a x509 certificate.
@@ -107,6 +171,7 @@ func generateFromCA() (*tls.Certificate, *x509.Certificate) {
 func ParseCertificates() (*tls.Certificate, *x509.Certificate) {
 	if *ca != "" {
 		if *cert != "" && *key != "" {
+			read_pin_data()
 			return loadFromFile()
 		}
 		if *caKey != "" {
@@ -208,9 +273,10 @@ func ServerCredentials() []grpc.ServerOption {
 	}
 
 	return []grpc.ServerOption{grpc.Creds(credentials.NewTLS(&tls.Config{
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		Certificates: certificates,
-		ClientCAs:    certPool,
+		VerifyPeerCertificate: CheckCertSANData,
+		ClientAuth:            tls.RequireAndVerifyClientCert,
+		Certificates:          certificates,
+		ClientCAs:             certPool,
 	}))}
 }
 
