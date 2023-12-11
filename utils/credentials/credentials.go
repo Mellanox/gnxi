@@ -95,41 +95,55 @@ func read_pin_data() {
 // return error else
 func CheckCertSANData(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 	log.Info("Starting checking SAN of the client certificate.")
-	if len(verifiedChains) == 0 {
-		return fmt.Errorf("tls: SAN pinning failed, No client certificate found")
+	var certifications []*x509.Certificate
+	for i := range verifiedChains {
+		certifications = append(certifications, verifiedChains[i]...)
 	}
+	if len(verifiedChains) == 0 && len(rawCerts) == 0 {
+			return fmt.Errorf("tls: SAN pinning failed, No client certificate found")
+	}
+	for i := range rawCerts {
+		data,_ := x509.ParseCertificate(rawCerts[i])
+		certifications = append(certifications,data)
+	}
+
 	// if we do not have certificate inside of the leaf we need to parse it from the client cert
-	certData := verifiedChains[0][0]
-
 	SubjectSANID := asn1.ObjectIdentifier{2, 5, 29, 17} // the id of SubjectAltName
-	for i := range certData.Extensions {
-		extension := certData.Extensions[i]
-		extention_ID := extension.Id
-		// searching for the extension that is equal to SubjectAltName
-		if len(extention_ID) != len(SubjectSANID) {
-			continue
-		}
-		// check the id of the extension to see if it equal to SAN
-		isSAN := true
-		for i := range SubjectSANID {
-			if extention_ID[i] != SubjectSANID[i] {
-				isSAN = false
-				break
+	for j := range certifications {
+		certData := certifications[j]
+		for i := range certData.Extensions {
+			extension := certData.Extensions[i]
+			extention_ID := extension.Id
+			// searching for the extension that is equal to SubjectAltName
+			if len(extention_ID) != len(SubjectSANID) {
+				continue
 			}
-		}
-		if !isSAN {
-			continue
-		}
+			// check the id of the extension to see if it equal to SAN
+			isSAN := true
+			for i := range SubjectSANID {
+				if extention_ID[i] != SubjectSANID[i] {
+					isSAN = false
+					break
+				}
+			}
+			if !isSAN {
+				continue
+			}
+			if len(extension.Value) < 5 {
+				log.Error("found a id value with less than 5 characters: " + fmt.Sprint(extension.Value))
+				continue
+			}
 
-		// extracting the certificate.
-		certificate_SAN := string(extension.Value)[4:] // the 4 first charcters are currecpted if you use this string, but it not use for us.
-		log.Info("Found SAN data, got: " + certificate_SAN)
-		if certificate_SAN != pin_data {
-			log.Error("SAN is not equal to authentication file! returning fail connection")
-			return fmt.Errorf("tls: SAN pinning failed, client certificate expected: %s, Got:%s", pin_data, certificate_SAN)
+			// extracting the certificate.
+			certificate_SAN := string(extension.Value)[4:] // the 4 first characters are corrupted if you use this string, but it not use for us.
+			log.Info("Found SAN data, got: " + certificate_SAN)
+			if certificate_SAN != pin_data {
+				log.Error("SAN is not equal to authentication file! returning fail connection")
+				return fmt.Errorf("tls: SAN pinning failed, client certificate expected: %s, Got:%s", pin_data, certificate_SAN)
+			}
+			// if checked that everything is fine, and we can return true
+			return nil
 		}
-		// if checked that everything is fine, and we can return true
-		return nil
 	}
 	log.Error("Could not find Client SubjectAltName")
 	return fmt.Errorf("tls: SAN pinning failed, client certificate does not have SubjectAltName extension.")
