@@ -19,7 +19,6 @@ package credentials
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
 	"flag"
@@ -75,19 +74,35 @@ func (a *userCredentials) RequireTransportSecurity() bool {
 	return true
 }
 
-func read_pin_data() {
+// read the san data from the UFM webclient configuration file.
+func read_pin_data() error {
 	log.Info("Loading authentication SAN data from webclient.")
-	fi, err := ioutil.ReadFile("/opt/ufm/files/conf/webclient/ufm_client_authen.db")
+	fi, err := ioutil.ReadFile(ufmCertLocation)
 	if err != nil {
 		//cannot read client ufm client authentication file
-		log.Error("Could not read the authentication file")
-		return
+		log.Error("Could not read the authentication file at "+ufmCertLocation)
+		return fmt.Errorf("Could not read data at:"+ufmCertLocation)
 	}
 	var result map[string]map[string]interface{}
-	json.Unmarshal([]byte(fi), &result)
+	err = json.Unmarshal([]byte(fi), &result)
+	if err != nil {
+		log.Error("Could not read the authentication: " + fmt.Sprint(err))
+		return fmt.Errorf("Could not unmarshal the data:" + fmt.Sprint(err))
+	}
+	if _,found := result["cert_info"]; !found {
+		err_str := "Could not find cert_info in the authentication at " + ufmCertLocation
+		log.Error(err_str)
+		return fmt.Errorf(err_str)
+	}
+	if _,found := result["cert_info"]["ssl_cert_hostnames"]; !found {
+		err_str := "Could not find ssl_cert_hostnames in the authentication at " + ufmCertLocation
+		log.Error(err_str)
+		return fmt.Errorf(err_str)
+	}
 	// we convert the file into map of map of interface to extract the string.
 	pin_data = fmt.Sprintf("%s", reflect.ValueOf(result["cert_info"]["ssl_cert_hostnames"]).Index(0))
 	log.Info("Loaded pin data to server: " + pin_data)
+	return nil
 }
 
 // Extract the client certification from a known location and compare it to the SAN of the client certificate.
@@ -96,58 +111,41 @@ func read_pin_data() {
 func CheckCertSANData(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 	log.Info("Starting checking SAN of the client certificate.")
 	var certifications []*x509.Certificate
-	for i := range verifiedChains {
-		certifications = append(certifications, verifiedChains[i]...)
+	for _,verifiedChain := range verifiedChains {
+		certifications = append(certifications, verifiedChain...)
 	}
 	if len(verifiedChains) == 0 && len(rawCerts) == 0 {
 			return fmt.Errorf("tls: SAN pinning failed, No client certificate found")
 	}
-	for i := range rawCerts {
-		data,_ := x509.ParseCertificate(rawCerts[i])
+	for _,rawCert := range rawCerts {
+		data,err := x509.ParseCertificate(rawCert)
+		if err != nil {
+			log.Warning("Could not parse certification")
+			continue
+		}
 		certifications = append(certifications,data)
 	}
 
 	// if we do not have certificate inside of the leaf we need to parse it from the client cert
-	SubjectSANID := asn1.ObjectIdentifier{2, 5, 29, 17} // the id of SubjectAltName
-	for j := range certifications {
-		certData := certifications[j]
-		for i := range certData.Extensions {
-			extension := certData.Extensions[i]
-			extention_ID := extension.Id
-			// searching for the extension that is equal to SubjectAltName
-			if len(extention_ID) != len(SubjectSANID) {
+	for _,certData := range certifications {
+		if len(certData.DNSNames) == 0 {
+			continue
+		}
+		log.Info("Found SAN data, got: " + fmt.Sprint(certData.DNSNames))
+		for _,SanData := range  certData.DNSNames {
+			if SanData != pin_data {
 				continue
-			}
-			// check the id of the extension to see if it equal to SAN
-			isSAN := true
-			for i := range SubjectSANID {
-				if extention_ID[i] != SubjectSANID[i] {
-					isSAN = false
-					break
-				}
-			}
-			if !isSAN {
-				continue
-			}
-			if len(extension.Value) < 5 {
-				log.Error("found a id value with less than 5 characters: " + fmt.Sprint(extension.Value))
-				continue
-			}
-
-			// extracting the certificate.
-			certificate_SAN := string(extension.Value)[4:] // the 4 first characters are corrupted if you use this string, but it not use for us.
-			log.Info("Found SAN data, got: " + certificate_SAN)
-			if certificate_SAN != pin_data {
-				log.Error("SAN is not equal to authentication file! returning fail connection")
-				return fmt.Errorf("tls: SAN pinning failed, client certificate expected: %s, Got:%s", pin_data, certificate_SAN)
 			}
 			// if checked that everything is fine, and we can return true
 			return nil
 		}
+		log.Error("SAN is not equal to authentication file! returning fail connection")
+		return fmt.Errorf("tls: SAN pinning failed, client certificate expected: %s, Got:%s", pin_data, fmt.Sprint(certData.DNSNames))
 	}
 	log.Error("Could not find Client SubjectAltName")
 	return fmt.Errorf("tls: SAN pinning failed, client certificate does not have SubjectAltName extension.")
 }
+
 
 // loadFromFile loads a certificate key pair into a tls certificate and a CA certificate into a x509 certificate.
 func loadFromFile() (*tls.Certificate, *x509.Certificate) {
