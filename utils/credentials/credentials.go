@@ -51,6 +51,7 @@ var (
 	caEnt          *entity.Entity
 	targetName     = "client.com"
 	pin_data       = ""
+	ufmCertLocation = "/opt/ufm/files/conf/webclient/ufm_client_authen.db"
 )
 
 func init() {
