@@ -140,7 +140,7 @@ func CheckCertSANData(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) e
 			return nil
 		}
 		log.Error("SAN is not equal to authentication file! returning fail connection")
-		return fmt.Errorf("tls: SAN pinning failed, client certificate expected: %s, Got:%s", pin_data, fmt.Sprint(certData.DNSNames))
+		return fmt.Errorf("tls: SAN pinning failed, client certificate SubjectAltName is incorrect.")
 	}
 	log.Error("Could not find Client SubjectAltName")
 	return fmt.Errorf("tls: SAN pinning failed, client certificate does not have SubjectAltName extension.")
