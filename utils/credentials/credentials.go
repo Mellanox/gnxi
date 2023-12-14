@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"reflect"
+	"regexp"
 
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
@@ -75,7 +76,7 @@ func (a *userCredentials) RequireTransportSecurity() bool {
 	return true
 }
 
-// read the san data from the UFM webclient configuration file.
+// read the san data from the UFM webclient configuration file. if the data is there, store the it in pin_data
 func read_pin_data() error {
 	log.Info("Loading authentication SAN data from webclient.")
 	fi, err := ioutil.ReadFile(ufmCertLocation)
@@ -84,39 +85,50 @@ func read_pin_data() error {
 		log.Error("Could not read the authentication file at "+ufmCertLocation)
 		return fmt.Errorf("Could not read data at:"+ufmCertLocation)
 	}
-	var result map[string]map[string]interface{}
-	err = json.Unmarshal([]byte(fi), &result)
+	
+	// we convert the file into map of map of interface to extract the string.
+	var search_data map[string]map[string]interface{}
+	err = json.Unmarshal([]byte(fi), &search_data)
 	if err != nil {
 		log.Error("Could not read the authentication: " + fmt.Sprint(err))
 		return fmt.Errorf("Could not unmarshal the data:" + fmt.Sprint(err))
 	}
-	if _,found := result["cert_info"]; !found {
+
+	// the item that we search is located at cert_info/ssl_cert_hostnames in the json file, so we check that both names exists.
+	
+	if _,found := search_data["cert_info"]; !found {
+		// if it cannot find cert_info in the file we cannot get the data.
 		err_str := "Could not find cert_info in the authentication at " + ufmCertLocation
 		log.Error(err_str)
 		return fmt.Errorf(err_str)
 	}
-	if _,found := result["cert_info"]["ssl_cert_hostnames"]; !found {
+	if _,found := search_data["cert_info"]["ssl_cert_hostnames"]; !found {
+		// if it cannot find ssl_cert_hostnames we cannot get the data.
 		err_str := "Could not find ssl_cert_hostnames in the authentication at " + ufmCertLocation
 		log.Error(err_str)
 		return fmt.Errorf(err_str)
 	}
-	// we convert the file into map of map of interface to extract the string.
-	pin_data = fmt.Sprintf("%s", reflect.ValueOf(result["cert_info"]["ssl_cert_hostnames"]).Index(0))
+	pin_data = fmt.Sprintf("%s", reflect.ValueOf(search_data["cert_info"]["ssl_cert_hostnames"]).Index(0))
 	log.Info("Loaded pin data to server: " + pin_data)
 	return nil
 }
 
-// Extract the client certification from a known location and compare it to the SAN of the client certificate.
-// return nil if cannot open the file or it pass SAN test.
+// Extract the SAN of the client certification from and compare it to UFM ssl_cert hostnames, in our pin_data.
+// return nil if there is no pin_data or it pass SAN test.
 // return error else
 func CheckCertSANData(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 	log.Info("Starting checking SAN of the client certificate.")
+	if len(pin_data) == 0 {
+		// our SAN does not have any data
+		return nil
+	}
+	// adding all the certification into one slice.
+	if len(verifiedChains) == 0 && len(rawCerts) == 0 {
+			return fmt.Errorf("tls: SAN pinning failed, No client certificate found")
+	}
 	var certifications []*x509.Certificate
 	for _,verifiedChain := range verifiedChains {
 		certifications = append(certifications, verifiedChain...)
-	}
-	if len(verifiedChains) == 0 && len(rawCerts) == 0 {
-			return fmt.Errorf("tls: SAN pinning failed, No client certificate found")
 	}
 	for _,rawCert := range rawCerts {
 		data,err := x509.ParseCertificate(rawCert)
@@ -126,15 +138,15 @@ func CheckCertSANData(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) e
 		}
 		certifications = append(certifications,data)
 	}
-
-	// if we do not have certificate inside of the leaf we need to parse it from the client cert
+	regularEx,_ := regexp.Compile(pin_data)
+	// search in each certificate the DNS names, if we found one we know it has the SAN data.
 	for _,certData := range certifications {
 		if len(certData.DNSNames) == 0 {
 			continue
 		}
-		log.Info("Found SAN data, got: " + fmt.Sprint(certData.DNSNames))
+		log.Info("Found client SAN data, got: " + fmt.Sprint(certData.DNSNames))
 		for _,SanData := range  certData.DNSNames {
-			if SanData != pin_data {
+			if !regularEx.MatchString(SanData) {
 				continue
 			}
 			// if checked that everything is fine, and we can return true
