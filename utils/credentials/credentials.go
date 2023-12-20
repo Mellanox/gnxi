@@ -94,23 +94,29 @@ func read_server_cert_hostnames() error {
 		return fmt.Errorf("Could not unmarshal the data:" + fmt.Sprint(err))
 	}
 
-	// the item that we search is located at cert_info/ssl_cert_hostnames in the json file, so we check that both names exists.
+	// the item that we search is located at client_info/client_cert_sans in the json file, so we check that both names exists.
 	
-	if _,found := search_data["cert_info"]; !found {
-		// if it cannot find cert_info in the file we cannot get the data.
-		err_str := "Could not find cert_info in the authentication at " + ufmCertLocation
+	if _,found := search_data["client_info"]; !found {
+		// if it cannot find client_info in the file we cannot get the data.
+		err_str := "Could not find client_info in the authentication at " + ufmCertLocation
 		log.Error(err_str)
 		return fmt.Errorf(err_str)
 	}
-	if _,found := search_data["cert_info"]["ssl_cert_hostnames"]; !found {
-		// if it cannot find ssl_cert_hostnames we cannot get the data.
-		err_str := "Could not find ssl_cert_hostnames in the authentication at " + ufmCertLocation
+	if _,found := search_data["client_info"]["client_cert_sans"]; !found {
+		// if it cannot find client_cert_sans we cannot get the data.
+		err_str := "Could not find client_cert_sans in the authentication at " + ufmCertLocation
 		log.Error(err_str)
 		return fmt.Errorf(err_str)
 	}
-	certHostnames :=reflect.ValueOf(search_data["cert_info"]["ssl_cert_hostnames"])
-	for i:= 1; i < certHostnames.Len(); i++ {
-		server_cert_hostnames = append(server_cert_hostnames,fmt.Sprintf("%s", certHostnames.Index(i)))
+	certHostnames := reflect.ValueOf(search_data["client_info"]["client_cert_sans"])
+	if fmt.Sprint(certHostnames.Kind()) != "map" {
+		// cert host names is not a map, cannot read it succesfully.
+		err_str := "Could not read the value of client_cert_sans in the authentication at " + ufmCertLocation
+		log.Error(err_str)
+		return fmt.Errorf(err_str)
+	}
+	for _,value := range certHostnames.MapKeys(){
+		server_cert_hostnames = append(server_cert_hostnames, fmt.Sprint(value))
 	}
 	log.Info("Loaded pin data to server: " + fmt.Sprint(server_cert_hostnames))
 	return nil
@@ -147,16 +153,20 @@ func CheckCertSANData(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) e
 			continue
 		}
 		log.Info("Found client SAN data, got: " + fmt.Sprint(certData.DNSNames))
-		for _,SanData := range  certData.DNSNames {
-			for _,server_hostname := range server_cert_hostnames {
+		for _,server_hostname := range server_cert_hostnames {
+			for _,SanData := range  certData.DNSNames {
+				if server_hostname == SanData {
+					return nil
+				} // else it not equal we take the regex of it.
+				
 				// create regex with flag ignore uppercases as it works in the UFM
 				regularEx,_ := regexp.Compile("(?i)"+server_hostname) 
 				if !regularEx.MatchString(SanData) {
 					continue
 				}
+				return nil
 			}
 			// if checked that everything is fine, and we can return true
-			return nil
 		}
 		log.Error("SAN is not match to authentication file! returning fail connection")
 		return fmt.Errorf("tls: SAN pinning failed, client certificate SubjectAltName is incorrect.")
