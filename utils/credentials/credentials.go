@@ -51,7 +51,7 @@ var (
 	passwordKey    = "password"
 	caEnt          *entity.Entity
 	targetName     = "client.com"
-	pin_data       = ""
+	server_cert_hostnames       = ""
 	ufmCertLocation = "/opt/ufm/files/conf/webclient/ufm_client_authen.db"
 )
 
@@ -76,8 +76,8 @@ func (a *userCredentials) RequireTransportSecurity() bool {
 	return true
 }
 
-// read the san data from the UFM webclient configuration file. if the data is there, store the it in pin_data
-func read_pin_data() error {
+// read the san data from the UFM webclient configuration file. if the data is there, store the it in server_cert_hostnames
+func read_server_cert_hostnames() error {
 	log.Info("Loading authentication SAN data from webclient.")
 	fi, err := ioutil.ReadFile(ufmCertLocation)
 	if err != nil {
@@ -108,17 +108,20 @@ func read_pin_data() error {
 		log.Error(err_str)
 		return fmt.Errorf(err_str)
 	}
-	pin_data = fmt.Sprintf("%s", reflect.ValueOf(search_data["cert_info"]["ssl_cert_hostnames"]).Index(0))
-	log.Info("Loaded pin data to server: " + pin_data)
+	certHostnames :=reflect.ValueOf(search_data["cert_info"]["ssl_cert_hostnames"])
+	for i:= 1; i < certHostnames.Len(); i++ {
+		server_cert_hostnames = append(server_cert_hostnames,fmt.Sprintf("%s", certHostnames.Index(i)))
+	}
+	log.Info("Loaded pin data to server: " + fmt.Sprint(server_cert_hostnames))
 	return nil
 }
 
-// Extract the SAN of the client certification from and compare it to UFM ssl_cert hostnames, in our pin_data.
-// return nil if there is no pin_data or it pass SAN test.
+// Extract the SAN of the client certification from and compare it to UFM ssl_cert hostnames, in our server_cert_hostnames.
+// return nil if there is no server_cert_hostnames or it pass SAN test.
 // return error else
 func CheckCertSANData(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 	log.Info("Starting checking SAN of the client certificate.")
-	if len(pin_data) == 0 {
+	if len(server_cert_hostnames) == 0 {
 		// our SAN does not have any data
 		return nil
 	}
@@ -138,7 +141,6 @@ func CheckCertSANData(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) e
 		}
 		certifications = append(certifications,data)
 	}
-	regularEx,_ := regexp.Compile(pin_data)
 	// search in each certificate the DNS names, if we found one we know it has the SAN data.
 	for _,certData := range certifications {
 		if len(certData.DNSNames) == 0 {
@@ -146,8 +148,12 @@ func CheckCertSANData(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) e
 		}
 		log.Info("Found client SAN data, got: " + fmt.Sprint(certData.DNSNames))
 		for _,SanData := range  certData.DNSNames {
-			if !regularEx.MatchString(SanData) {
-				continue
+			for _,server_hostname := range server_cert_hostnames {
+				// create regex with flag ignore uppercases as it works in the UFM
+				regularEx,_ := regexp.Compile("(?i)"+server_hostname) 
+				if !regularEx.MatchString(SanData) {
+					continue
+				}
 			}
 			// if checked that everything is fine, and we can return true
 			return nil
@@ -196,7 +202,7 @@ func generateFromCA() (*tls.Certificate, *x509.Certificate) {
 func ParseCertificates() (*tls.Certificate, *x509.Certificate) {
 	if *ca != "" {
 		if *cert != "" && *key != "" {
-			read_pin_data()
+			read_server_cert_hostnames()
 			return loadFromFile()
 		}
 		if *caKey != "" {
