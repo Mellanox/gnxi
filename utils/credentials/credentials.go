@@ -158,7 +158,7 @@ func CheckCertSANData(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) e
 			// if checked that everything is fine, and we can return true
 			return nil
 		}
-		log.Error("SAN is not equal to authentication file! returning fail connection")
+		log.Error("SAN is not match to authentication file! returning fail connection")
 		return fmt.Errorf("tls: SAN pinning failed, client certificate SubjectAltName is incorrect.")
 	}
 	log.Error("Could not find Client SubjectAltName")
