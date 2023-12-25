@@ -51,7 +51,7 @@ var (
 	passwordKey    = "password"
 	caEnt          *entity.Entity
 	targetName     = "client.com"
-	server_cert_hostnames       = ""
+	server_cert_hostnames []string
 	ufmCertLocation = "/opt/ufm/files/conf/webclient/ufm_client_authen.db"
 )
 
