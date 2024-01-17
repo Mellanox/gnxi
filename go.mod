@@ -19,6 +19,7 @@ require (
 	github.com/openconfig/goyang v1.4.4
 	github.com/openconfig/ygot v0.29.16
 	github.com/pelletier/go-toml/v2 v2.1.1 // indirect
+	github.com/sirupsen/logrus v1.6.0
 	github.com/spf13/afero v1.11.0
 	github.com/spf13/cobra v1.8.0
 	github.com/spf13/viper v1.18.1
@@ -28,4 +29,5 @@ require (
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20231211222908-989df2bf70f3 // indirect
 	google.golang.org/grpc v1.60.0
 	google.golang.org/protobuf v1.31.0
+	gopkg.in/natefinch/lumberjack.v2 v2.2.1
 )
