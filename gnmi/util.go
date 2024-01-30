@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"strconv"
 
-	log "github.com/golang/glog"
 	"github.com/openconfig/goyang/pkg/yang"
 
 	pb "github.com/openconfig/gnmi/proto/gnmi"
