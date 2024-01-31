@@ -32,7 +32,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 
-	log "github.com/golang/glog"
+	"github.com/sirupsen/logrus"
 	"github.com/google/gnxi/utils/entity"
 )
 
@@ -53,6 +53,7 @@ var (
 	targetName     = "client.com"
 	server_cert_hostnames []string
 	ufmCertLocation = "/opt/ufm/files/conf/webclient/ufm_client_authen.db"
+	log             *logrus.Logger
 )
 
 func init() {
@@ -180,20 +181,24 @@ func CheckCertSANData(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) e
 func loadFromFile() (*tls.Certificate, *x509.Certificate) {
 	certificate, err := tls.LoadX509KeyPair(*cert, *key)
 	if err != nil {
-		log.Exit("Could not load key/certificate pair from files:", err)
+		log.Error("Could not load key/certificate pair from files:", err)
+		os.Exit(1)
 	}
 	certificate.Leaf, err = x509.ParseCertificate(certificate.Certificate[0])
 	if err != nil {
-		log.Exit("Could not parse x509 certificate from tls certificate:", err)
+		log.Error("Could not parse x509 certificate from tls certificate:", err)
+		os.Exit(1)
 	}
 	caFile, err := ioutil.ReadFile(*ca)
 	if err != nil {
-		log.Exitf("could not read CA certificate: %s", err)
+		log.Errorf("could not read CA certificate: %s", err)
+		os.Exit(1)
 	}
 	block, _ := pem.Decode(caFile)
 	caCert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		log.Exit("Error parsing CA certificate", err)
+		log.Errorf("Error parsing CA certificate", err)
+		os.Exit(1)
 	}
 	return &certificate, caCert
 }
@@ -203,7 +208,8 @@ func generateFromCA() (*tls.Certificate, *x509.Certificate) {
 	GetCAEntity()
 	clientEnt, err := entity.CreateSigned(targetName, nil, caEnt)
 	if err != nil {
-		log.Exitf("Failed to create a signed entity: %v", err)
+		log.Errorf("Failed to create a signed entity: %v", err)
+		os.Exit(1)
 	}
 	return clientEnt.Certificate, caEnt.Certificate.Leaf
 }
@@ -227,7 +233,8 @@ func LoadCertificates() ([]tls.Certificate, *x509.CertPool) {
 	certPool := x509.NewCertPool()
 	certs, caBundle := ParseCertificates()
 	if certs == nil || caBundle == nil {
-		log.Exit("Please provide -ca & -key or -ca, -cert & -ca_key")
+		log.Error("Please provide -ca & -key or -ca, -cert & -ca_key")
+		os.Exit(1)
 	}
 	certPool.AddCert(caBundle)
 	return []tls.Certificate{*certs}, certPool
@@ -241,7 +248,7 @@ func SetTargetName(name string) {
 // ClientCredentials generates gRPC DialOptions for existing credentials.
 func ClientCredentials() []grpc.DialOption {
 	if *TargetName == "" {
-		log.Exit("Please provide a -target_name")
+		log.Error("Please provide a -target_name")
 	}
 	opts := []grpc.DialOption{}
 
@@ -288,17 +295,20 @@ func GetCAEntity() *entity.Entity {
 		return caEnt
 	}
 	if *caKey == "" {
-		log.Exit("-ca_key must be set with file locations")
+		log.Error("-ca_key must be set with file locations")
+		os.Exit(1)
 	}
 	var err error
 	if caEnt, err = entity.FromFile(*ca, *caKey); err != nil {
-		log.Exitf("Failed to load certificate and key from file: %v", err)
+		log.Error("Failed to load certificate and key from file: %v", err)
+		os.Exit(1)
 	}
 	return caEnt
 }
 
 // ServerCredentials generates gRPC ServerOptions for existing credentials.
-func ServerCredentials() []grpc.ServerOption {
+func ServerCredentials(logger *logrus.Logger) []grpc.ServerOption {
+	log = logger
 	if *notls {
 		return []grpc.ServerOption{}
 	}
